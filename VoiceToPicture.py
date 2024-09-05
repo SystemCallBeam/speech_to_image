@@ -1,5 +1,4 @@
 import speech_recognition as sr
-# import pyaudio
 import threading
 import queue
 import time
@@ -9,14 +8,12 @@ import io
 import base64
 from dotenv import load_dotenv
 import os
-
-
 import sys
 
+# Ensure UTF-8 output for any print statements
 sys.stdout.reconfigure(encoding="utf-8")
 
-
-# Load environment variables
+# Load environment variables from .env (if needed for other parts of your project)
 load_dotenv()
 
 # Initialize Pygame for display
@@ -30,6 +27,7 @@ image_queue = queue.Queue()
 
 
 def continuous_speech_recognition():
+    """Speech recognition thread function: captures audio and converts it to text."""
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         print("Start speaking...")
@@ -39,36 +37,38 @@ def continuous_speech_recognition():
                 text = recognizer.recognize_google(audio, language="th-TH")
                 text_queue.put(text)
             except sr.UnknownValueError:
-                pass
+                pass  # If speech was not recognized
             except sr.RequestError as e:
                 print(f"Could not request results; {e}")
 
 
 def process_text_and_generate_image():
+    """Processes recognized text and generates an image based on the text."""
     while True:
         if not text_queue.empty():
             text = text_queue.get()
-
-            # Generate image based on text and sentiment
+            # Generate image based on text
             image_url = generate_image(text)
-
             if image_url:
                 image_queue.put(image_url)
 
 
 def read_file(filepath):
+    """Reads a file and returns its content."""
     with open(filepath, 'r') as file:
         return file.read().strip()
 
 
 def generate_image(text):
-    api_key = read_file('stability_key.txt')
+    """Calls the Stability AI API to generate an image based on the given text."""
+    api_key = read_file('stability_key.txt')  # Ensure this file exists with your API key
     api_host = "https://api.stability.ai"
     engine_id = "stable-diffusion-xl-1024-v1-0"
 
-    # Adjust prompt based on sentiment
+    # Example prompt based on recognized text
     prompt = f"A bright, cheerful image representing: {text}"
 
+    # Make the API request to generate an image
     response = requests.post(
         f"{api_host}/v1/generation/{engine_id}/text-to-image",
         headers={
@@ -79,7 +79,7 @@ def generate_image(text):
         json={
             "text_prompts": [{"text": prompt}],
             "cfg_scale": 7,
-            "height": 1024,
+            "height": 1024,  # Make sure dimensions are valid for the engine
             "width": 1024,
             "samples": 1,
             "steps": 30,
@@ -90,12 +90,14 @@ def generate_image(text):
         print(f"Error: {response.text}")
         return None
 
+    # Extract image from the response
     data = response.json()
     image_base64 = data["artifacts"][0]["base64"]
     return image_base64
 
 
 def display_images():
+    """Thread to display images on the Pygame screen."""
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -109,10 +111,11 @@ def display_images():
             screen.blit(pygame.transform.scale(image, (800, 600)), (0, 0))
             pygame.display.flip()
 
-        time.sleep(0.1)
+        time.sleep(0.1)  # Sleep to give the display thread some breathing room
 
 
 def process_text():
+    """Thread to print recognized text to the console."""
     while True:
         if not text_queue.empty():
             text = text_queue.get()
