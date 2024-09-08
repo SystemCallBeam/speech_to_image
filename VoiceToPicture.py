@@ -3,12 +3,12 @@ import threading
 import queue
 import time
 import requests
-import pygame
 import io
 import base64
 from dotenv import load_dotenv
-import os
 import sys
+from tkinter import Tk, Label
+from PIL import Image, ImageTk  # Pillow for handling images
 
 # Ensure UTF-8 output for any print statements
 sys.stdout.reconfigure(encoding="utf-8")
@@ -16,15 +16,16 @@ sys.stdout.reconfigure(encoding="utf-8")
 # Load environment variables from .env (if needed for other parts of your project)
 load_dotenv()
 
-# Initialize Pygame for display
-pygame.init()
-screen = pygame.display.set_mode((800, 600))
-pygame.display.set_caption("Real-time Presentation")
-
 # Initialize queues for communication between threads
 text_queue = queue.Queue()
 image_queue = queue.Queue()
 
+# Tkinter setup for displaying images
+root = Tk()
+root.title("Real-time Image Display")
+root.geometry("800x600")
+label = Label(root)
+label.pack()
 
 def continuous_speech_recognition():
     """Speech recognition thread function: captures audio and converts it to text."""
@@ -34,13 +35,12 @@ def continuous_speech_recognition():
         while True:
             try:
                 audio = recognizer.listen(source, phrase_time_limit=3)
-                text = recognizer.recognize_google(audio, language="th-TH")
+                text = recognizer.recognize_google(audio, language="en")
                 text_queue.put(text)
             except sr.UnknownValueError:
                 pass  # If speech was not recognized
             except sr.RequestError as e:
                 print(f"Could not request results; {e}")
-
 
 def process_text_and_generate_image():
     """Processes recognized text and generates an image based on the text."""
@@ -52,12 +52,10 @@ def process_text_and_generate_image():
             if image_url:
                 image_queue.put(image_url)
 
-
 def read_file(filepath):
     """Reads a file and returns its content."""
     with open(filepath, 'r') as file:
         return file.read().strip()
-
 
 def generate_image(text):
     """Calls the Stability AI API to generate an image based on the given text."""
@@ -95,24 +93,23 @@ def generate_image(text):
     image_base64 = data["artifacts"][0]["base64"]
     return image_base64
 
-
 def display_images():
-    """Thread to display images on the Pygame screen."""
+    """Thread to display images on the Tkinter screen."""
     while True:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                return
-
         if not image_queue.empty():
             image_base64 = image_queue.get()
             image_data = base64.b64decode(image_base64)
-            image = pygame.image.load(io.BytesIO(image_data))
-            screen.blit(pygame.transform.scale(image, (800, 600)), (0, 0))
-            pygame.display.flip()
+            image = Image.open(io.BytesIO(image_data))
 
-        time.sleep(0.1)  # Sleep to give the display thread some breathing room
+            # Resize image to fit window
+            image = image.resize((800, 600), Image.Resampling.LANCZOS)
 
+            # Convert image to Tkinter-compatible format
+            tk_image = ImageTk.PhotoImage(image)
+            label.config(image=tk_image)
+            label.image = tk_image  # Keep a reference to avoid garbage collection
+
+        time.sleep(0.01)
 
 def process_text():
     """Thread to print recognized text to the console."""
@@ -121,13 +118,11 @@ def process_text():
             text = text_queue.get()
             print(f"Recognized Text: {text}")
 
-
 # Start threads
 threading.Thread(target=continuous_speech_recognition, daemon=True).start()
 threading.Thread(target=process_text_and_generate_image, daemon=True).start()
-threading.Thread(target=display_images, daemon=True).start()
 threading.Thread(target=process_text, daemon=True).start()
+threading.Thread(target=display_images, daemon=True).start()
 
-# Keep the main thread alive
-while True:
-    time.sleep(1)
+# Start Tkinter's main loop to keep the window active
+root.mainloop()
