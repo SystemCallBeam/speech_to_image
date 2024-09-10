@@ -8,7 +8,7 @@ import base64
 from dotenv import load_dotenv
 import sys
 import os
-from tkinter import Tk, Label, Button
+from tkinter import Tk, Label, Button, Frame, filedialog
 from PIL import Image, ImageTk  # Pillow for handling images
 
 # Ensure UTF-8 output for any print statements
@@ -25,6 +25,14 @@ image_queue = queue.Queue()
 root = Tk()
 root.title("Real-time Image Display")
 root.geometry("800x600")
+
+# Divide the window into two parts: one for buttons and one for images
+button_frame = Frame(root)
+button_frame.pack(side="top", fill="x")
+
+image_frame = Frame(root)
+image_frame.pack(side="bottom", fill="both", expand=True)
+
 label = Label(root)
 label.pack()
 
@@ -67,10 +75,8 @@ def process_text_and_generate_image():
             if image_url:
                 image_queue.put(image_url)
                 save_image_to_file(image_url, text)
+                save_text_to_file(text)
                 
-                # Save text to file
-                with open(text_log_file, "a", encoding="utf-8") as f:
-                    f.write(text + "\n")
 
 def read_file(filepath):
     """Reads a file and returns its content."""
@@ -114,6 +120,11 @@ def generate_image(text):
     print('Return prompt:' + text)
     return image_base64
 
+def save_text_to_file(text):
+    # Save text to file
+    with open(text_log_file, "a", encoding="utf-8") as f:
+        f.write(text + "\n")
+                    
 def save_image_to_file(image_base64, text):
     """Saves the image to a file with a name based on the text."""
     image_data = base64.b64decode(image_base64)
@@ -165,17 +176,24 @@ def show_past_texts():
     with open(text_log_file, "r", encoding="utf-8") as f:
         past_texts = f.read()
     print("Past texts:\n", past_texts)
+    
+def quit_app():
+    root.quit()
+    
+# Button to quit
+quit_button = Button(button_frame, text="Quit", command=quit_app)
+quit_button.pack(side="right", padx=10, pady=10)
 
 # Button to display past texts
-show_texts_button = Button(root, text="Show Past Texts", command=show_past_texts)
-show_texts_button.pack()
+show_texts_button = Button(button_frame, text="Show Past Texts", command=show_past_texts)
+show_texts_button.pack(side="left", padx=10, pady=10)
 
 # Buttons to start/stop recording
-start_button = Button(root, text="Start Recording", command=start_recording)
-start_button.pack()
+start_button = Button(button_frame, text="Start Recording", command=start_recording)
+start_button.pack(side="left", padx=10, pady=10)
 
-stop_button = Button(root, text="Stop Recording", command=stop_recording)
-stop_button.pack()
+stop_button = Button(button_frame, text="Stop Recording", command=stop_recording)
+stop_button.pack(side="left", padx=10, pady=10)
 
 # Start threads
 threading.Thread(target=continuous_speech_recognition, daemon=True).start()
