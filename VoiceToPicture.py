@@ -7,6 +7,7 @@ import io
 import base64
 from dotenv import load_dotenv
 import sys
+import os
 from tkinter import Tk, Label
 from PIL import Image, ImageTk  # Pillow for handling images
 
@@ -26,6 +27,14 @@ root.title("Real-time Image Display")
 root.geometry("800x600")
 label = Label(root)
 label.pack()
+
+# Define the text file and image directory paths
+text_log_file = "recognized_texts.txt"
+image_directory = "generated_images"
+
+# Create directory if it doesn't exist
+if not os.path.exists(image_directory):
+    os.makedirs(image_directory)
 
 def continuous_speech_recognition():
     """Speech recognition thread function: captures audio and converts it to text."""
@@ -47,10 +56,16 @@ def process_text_and_generate_image():
     while True:
         if not text_queue.empty():
             text = text_queue.get()
+            
             # Generate image based on text
             image_url = generate_image(text)
             if image_url:
                 image_queue.put(image_url)
+                save_image_to_file(image_url, text)
+                
+                # Save text to file
+                with open(text_log_file, "a", encoding="utf-8") as f:
+                    f.write(text + "\n")
 
 def read_file(filepath):
     """Reads a file and returns its content."""
@@ -64,7 +79,7 @@ def generate_image(text):
     engine_id = "stable-diffusion-xl-1024-v1-0"
 
     # Example prompt based on recognized text
-    prompt = f"A bright, cheerful image representing: {text}"
+    prompt = f"Create an image with a clean white background. Use simple, thin lines to represent an abstract or conceptual idea based on the '{text}'"
 
     # Make the API request to generate an image
     response = requests.post(
@@ -91,8 +106,18 @@ def generate_image(text):
     # Extract image from the response
     data = response.json()
     image_base64 = data["artifacts"][0]["base64"]
+    print('Return prompt:' + text)
     return image_base64
 
+def save_image_to_file(image_base64, text):
+    """Saves the image to a file with a name based on the text."""
+    image_data = base64.b64decode(image_base64)
+    image = Image.open(io.BytesIO(image_data))
+
+    # Save image with a unique name
+    image_filename = f"{text[:10]}_{int(time.time())}.png"
+    image.save(os.path.join(image_directory, image_filename))
+    
 def display_images():
     """Thread to display images on the Tkinter screen."""
     while True:
