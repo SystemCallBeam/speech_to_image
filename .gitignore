@@ -1,0 +1,5 @@
+.env
+
+*.txt
+*.log
+*.pyc
