@@ -8,7 +8,7 @@ import base64
 from dotenv import load_dotenv
 import sys
 import os
-from tkinter import Tk, Label
+from tkinter import Tk, Label, Button
 from PIL import Image, ImageTk  # Pillow for handling images
 
 # Ensure UTF-8 output for any print statements
@@ -28,6 +28,9 @@ root.geometry("800x600")
 label = Label(root)
 label.pack()
 
+# Global variable to control recording
+is_recording = False
+
 # Define the text file and image directory paths
 text_log_file = "recognized_texts.txt"
 image_directory = "generated_images"
@@ -38,18 +41,20 @@ if not os.path.exists(image_directory):
 
 def continuous_speech_recognition():
     """Speech recognition thread function: captures audio and converts it to text."""
+    """Capture audio only when recording is active."""
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
-        print("Start speaking...")
+        print("Ready to start speaking...")
         while True:
-            try:
-                audio = recognizer.listen(source, phrase_time_limit=3)
-                text = recognizer.recognize_google(audio, language="en")
-                text_queue.put(text)
-            except sr.UnknownValueError:
-                pass  # If speech was not recognized
-            except sr.RequestError as e:
-                print(f"Could not request results; {e}")
+            if is_recording:
+                try:
+                    audio = recognizer.listen(source, phrase_time_limit=3)
+                    text = recognizer.recognize_google(audio, language="en")
+                    text_queue.put(text)
+                except sr.UnknownValueError:
+                    pass  # If speech was not recognized
+                except sr.RequestError as e:
+                    print(f"Could not request results; {e}")
 
 def process_text_and_generate_image():
     """Processes recognized text and generates an image based on the text."""
@@ -142,6 +147,35 @@ def process_text():
         if not text_queue.empty():
             text = text_queue.get()
             print(f"Recognized Text: {text}")
+
+def start_recording():
+    """Starts the speech recognition process."""
+    global is_recording
+    is_recording = True
+    print("Recording started...")
+
+def stop_recording():
+    """Stops the speech recognition process."""
+    global is_recording
+    is_recording = False
+    print("Recording stopped.")
+    
+def show_past_texts():
+    """Opens and displays the past recognized texts."""
+    with open(text_log_file, "r", encoding="utf-8") as f:
+        past_texts = f.read()
+    print("Past texts:\n", past_texts)
+
+# Button to display past texts
+show_texts_button = Button(root, text="Show Past Texts", command=show_past_texts)
+show_texts_button.pack()
+
+# Buttons to start/stop recording
+start_button = Button(root, text="Start Recording", command=start_recording)
+start_button.pack()
+
+stop_button = Button(root, text="Stop Recording", command=stop_recording)
+stop_button.pack()
 
 # Start threads
 threading.Thread(target=continuous_speech_recognition, daemon=True).start()
