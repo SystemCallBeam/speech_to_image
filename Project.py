@@ -5,45 +5,31 @@ import tkinter as tk
 from tkinter import Image, Label, scrolledtext
 import speech_recognition as sr
 import requests
-import json
 import threading
 from googletrans import Translator
 from PIL import Image, ImageTk
-from transformers import T5ForConditionalGeneration, T5Tokenizer
+import spacy
+import torch
+from transformers import CLIPProcessor, CLIPModel
 
-"""
-# Function to convert Thai text to English using LibreTranslate API
-def translate_to_english(thai_text):
-    if not thai_text.strip():  # ตรวจสอบว่าข้อความไทยไม่ว่างเปล่า
-        print("No Thai text provided.")
-        return ""
-        
-    api_url = "https://libretranslate.com/translate"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "q": thai_text,
-        "source": "th",
-        "target": "en",
-        "format": "text"
-    }
-    
-    response = requests.post(api_url, headers=headers, data=json.dumps(payload))
-    
-    if response.status_code == 200:
-        return response.json()["translatedText"]
-    else:
-        print(f"Error translating text: {response.status_code}")
-        print(f"Response content: {response.content}")
-        return ""
-"""
+
+nlp = spacy.load("en_core_web_sm")
+model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+cur_image = len(os.listdir('generated_images'))
+
 def translate_to_english(thai_text):
     if not thai_text.strip():
         print("No Thai text provided.")
         return ""
 
     translator = Translator()
-    translated = translator.translate(thai_text, src='th', dest='en')
-    return translated.text
+    try:
+        translated = translator.translate(thai_text, src='th', dest='en')
+        return translated.text
+    except Exception as e:
+        print(f"Translation error: {e}")
+        return ""
 
 # Function to recognize speech and return the recognized text in Thai
 def recognize_speech():
@@ -55,18 +41,23 @@ def recognize_speech():
             try:
                 thai_text = recognizer.recognize_google(audio, language="th-TH")
                 print(f"Recognized Thai: {thai_text}")
-                process_recognized_text(thai_text)  # ส่งข้อความที่รู้จำไปยังฟังก์ชันประมวลผล
+                process_text(thai_text)  # ส่งข้อความที่รู้จำไปยังฟังก์ชันประมวลผล
             except sr.UnknownValueError:
                 print("Could not understand audio")
             except sr.RequestError as e:
                 print(f"Could not request results; {e}")
 
-def process_recognized_text(thai_text):
+def process_text(thai_text):
     english_text = translate_to_english(thai_text)
     prompt = convert_to_prompt(english_text)
-    output_box.insert(tk.END, f"Prompt: {prompt}\n")
-    submit_prompt(prompt)
-    save_text(thai_text, english_text)
+    if prompt:
+        output_box.insert(tk.END, f"Prompt: {prompt}\n")
+        file_name = submit_prompt(prompt)
+        save_text(thai_text, english_text)
+        similarity_score = evaluate_text_image_similarity(english_text, file_name)
+        output_box.insert(tk.END, f"Similarity : {similarity_score:.4f}")
+    else:
+        pass
 
 # Function to start recording in a separate thread
 def start_recording():
@@ -83,23 +74,29 @@ def stop_recording():
 
 # Function to simulate converting English text to an image generation prompt
 def convert_to_prompt(english_text):
-    return convert_to_prompt_with_t5(english_text)
+    # prompt = convert_to_prompt_with_t5(english_text) 
+    keywords = extract_keywords(english_text)
+    if keywords:
+        prompt = f"create image by topic '{keywords}'. with black-white background and line to draw"
+        return prompt
+    else :
+        return ''
 
-def convert_to_prompt_with_t5(text):
-    # โหลดโมเดล T5 และ tokenizer
-    tokenizer = T5Tokenizer.from_pretrained("t5-small")
-    model = T5ForConditionalGeneration.from_pretrained("t5-small")
+def extract_keywords(text):
+    doc = nlp(text)
     
-    # เตรียมข้อความให้พร้อมใช้กับโมเดล
-    input_ids = tokenizer("Summarize the key points and Generate a presentation-style prompt for this text:" + text + ". Create the image as a simple black-and-white line drawing.", return_tensors="pt").input_ids
+    keywords = []
     
-    # ใช้โมเดล T5 ในการแปลงข้อความ
-    outputs = model.generate(input_ids)
+    # ดึงเฉพาะคำนาม (Nouns), คำคุณศัพท์ (Adjectives) หรือ Entity (Named Entities)
+    for token in doc:
+        if token.pos_ in ("NOUN", 'VERB'): # , "PROPN", "ADJ"
+            keywords.append(token.text)
     
-    # แปลงผลลัพธ์กลับเป็นข้อความ
-    prompt = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    
-    return prompt
+    # หรือสามารถดึง Noun Chunks (กลุ่มคำที่เป็นคำนาม)
+    # for chunk in doc.noun_chunks:
+    #     keywords.append(chunk.text)
+
+    return keywords
 
 def read_file(filepath):
     with open(filepath, 'r', encoding='utf-8') as file:
@@ -145,14 +142,32 @@ def generate_image(text):
     
     return image
 
+def evaluate_text_image_similarity(text, image_path):
+    # Load and preprocess image
+    # image = Image.open(image_path)
+    
+    # Preprocess text and image
+    inputs = processor(text=[text], images=image_path, return_tensors="pt", padding=True)
+
+    # Compute embeddings
+    with torch.no_grad():
+        outputs = model(**inputs)
+        text_embeds = outputs.text_embeds
+        image_embeds = outputs.image_embeds
+
+    # Normalize embeddings
+    text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+    image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
+
+    # Compute cosine similarity
+    similarity = (text_embeds @ image_embeds.T).item()
+    
+    return similarity
+
 def submit_thai():
     thai_text = thai_input.get()
     if thai_text and not recording:
-        english_text = translate_to_english(thai_text)
-        prompt = convert_to_prompt(english_text)
-        output_box.insert(tk.END, f"Prompt: {prompt}\n")
-        submit_prompt(prompt)
-        save_text(thai_text, english_text)
+        process_text(thai_text)
     else:
         output_box.insert(tk.END, "Thai text is empty or recording is active.\n")
 
@@ -172,6 +187,7 @@ def save_image(image, folder="generated_images"):
     filename = os.path.join(folder, f"generated_image_{len(os.listdir(folder)) + 1}.png")
     image.save(filename)
     print(f"Saved image to {filename}")
+    return filename
 
 def show_image(image):
     # Create a new window for the image
@@ -182,12 +198,12 @@ def show_image(image):
     image_label.config(image=img)
     image_label.image = img 
 
-# Example usage: generate an image from a prompt and show it
 def submit_prompt(prompt):
     image = generate_image(prompt)
     if image:
         show_image(image)
-        save_image(image)
+        file_name = save_image(image)
+    return image # file_name
 
 root = tk.Tk()
 root.title("Image Generator")
@@ -216,13 +232,13 @@ stop_button.pack()
 thai_input_label = tk.Label(control_frame, text="Manual Thai Input:")
 thai_input_label.pack()
 
-thai_input = tk.Entry(control_frame, width=50)
+thai_input = tk.Entry(control_frame, width=20)
 thai_input.pack()
 
 submit_button = tk.Button(control_frame, text="Submit Thai", command=submit_thai)
 submit_button.pack(pady=10)
 
-output_box = scrolledtext.ScrolledText(control_frame, width=50, height=10)
+output_box = scrolledtext.ScrolledText(control_frame, width=20, height=10)
 output_box.pack()
 
 exit_button = tk.Button(control_frame, text="Exit", command=root.quit)
