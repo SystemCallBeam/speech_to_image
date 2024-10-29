@@ -14,25 +14,30 @@ nlp = spacy.load("en_core_web_sm")
 clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
 clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
 translator = Translator()
+recognizer = sr.Recognizer()
 
 # Function to recognize speech in Thai and translate to English
-def recognize_and_translate():
-    recognizer = sr.Recognizer()
+def recognize():
     with sr.Microphone() as source:
         audio = recognizer.listen(source)
         try:
             thai_text = recognizer.recognize_google(audio, language="th-TH")
-            english_text = translator.translate(thai_text, src="th", dest="en").text
-            return thai_text, english_text
+            return thai_text, audio
         except Exception as e:
             return "Error: " + str(e), "Error: " + str(e)
 
+def translate(thai_text):
+    english_text = translator.translate(thai_text, src="th", dest="en").text
+    return english_text
+
+def generate_prompt(text):
+    prompt = ' '.join([token.text for token in nlp(text) if token.pos_ in ("NOUN", "VERB")])
+    return prompt
+
 # Generate an image based on the prompt and return the similarity score
-def generate_image(english_text):
-    prompt = ' '.join([token.text for token in nlp(english_text) if token.pos_ in ("NOUN", "VERB")])
-    
+def generate_image(prompt):
     # Stability API request
-    api_key = "YOUR_STABILITY_API_KEY"  # Replace with your key
+    api_key = "sk-GGBSqH7tQmBlDPcyXwtmbonJJsaSjay0vFsrvM54mtQzjieE"  # Replace with your key
     response = requests.post(
         "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
         headers={
@@ -54,34 +59,70 @@ def generate_image(english_text):
         image_data = base64.b64decode(image_base64)
         image = Image.open(io.BytesIO(image_data))
         
-        # Evaluate similarity using CLIP
-        inputs = clip_processor(text=[english_text], images=image, return_tensors="pt", padding=True)
-        with torch.no_grad():
-            outputs = clip_model(**inputs)
-            text_embeds = outputs.text_embeds
-            image_embeds = outputs.image_embeds
-            similarity = (text_embeds @ image_embeds.T).item()
-
-        return image, similarity
+        return image
     else:
-        return None, 0.0
+        return None
+
+def clip_score(text, image):
+    inputs = clip_processor(text=[text], images=image, return_tensors="pt", padding=True)
+    with torch.no_grad():
+        outputs = clip_model(**inputs)
+        text_embeds = outputs.text_embeds
+        image_embeds = outputs.image_embeds
+        similarity = (text_embeds @ image_embeds.T).item()
+
+    return similarity
 
 # Gradio interface functions
 def process_audio():
-    thai_text, english_text = recognize_and_translate()
-    image, score = generate_image(english_text)
-    return thai_text, english_text, score, image
+    thai_text, audio = recognize()
+    english_text = translate(thai_text)
+    prompt = generate_prompt(english_text)
+    image = generate_image(prompt)
+    score = clip_score(english_text, image)
+    save_log(thai_text, english_text, prompt)
+    return thai_text, audio, english_text, prompt, score, image
+
+def process_text(text):
+    thai_text = text
+    english_text = translate(thai_text)
+    prompt = generate_prompt(english_text)
+    image = generate_image(prompt)
+    score = clip_score(english_text, image)
+    save_log(thai_text, english_text, prompt)
+    return '', english_text, prompt, score, image
+
+def save_log(thai_text, translated_text, prompt):
+    with open("thai_texts.txt", "a", encoding="utf-8") as f1, open("translated_texts.txt", "a", encoding="utf-8") as f2, open("prompts.txt", "a", encoding="utf-8") as f3:
+        f1.write(thai_text + "\n")
+        f2.write(translated_text + "\n")
+        f3.write(prompt + "\n")
 
 # Gradio layout with image on the right
 with gr.Blocks() as demo:
     with gr.Row():
         with gr.Column():
-            thai_text = gr.Textbox(label="Thai Text")
-            english_text = gr.Textbox(label="English Translation")
-            score = gr.Number(label="CLIP Similarity Score")
-            start_stop_button = gr.Button("Start/Stop Recording")
-            start_stop_button.click(process_audio, outputs=[thai_text, english_text, score, gr.Image()])
+            recognize_button = gr.Button("Start Record")
+            audio_output = gr.Audio(label="Recorded")
+            text_input = gr.Textbox(label="Enter Thai Text")
+            text_button = gr.Button("Submit Text")
+
+            thai_text_output = gr.Textbox(label="Recognized Thai Text")
+            english_text_output = gr.Textbox(label="Translated English Text")
+            prompt_output = gr.Textbox(label="Generated Prompt")
+
         with gr.Column():
-            image_display = gr.Image(label="Generated Image")
+            image_output = gr.Image(label="Generated Image")
+            similarity_score_output = gr.Number(label="CLIP Similarity Score")
+
+    recognize_button.click(
+        process_audio,
+        outputs=[thai_text_output, audio_output, english_text_output, prompt_output, similarity_score_output, image_output]
+    )
+    text_button.click(
+        process_text,
+        inputs=[text_input],
+        outputs=[thai_text_output, english_text_output, prompt_output, similarity_score_output, image_output]
+    )
 
 demo.launch()
