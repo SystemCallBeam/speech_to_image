@@ -1,122 +1,55 @@
-import base64
-import io
 import os
-import tkinter as tk
-from tkinter import Image, Label, scrolledtext
+import gradio as gr
 import speech_recognition as sr
-import requests
-import threading
 from googletrans import Translator
-from PIL import Image, ImageTk
-import spacy
+from PIL import Image
 import torch
 from transformers import CLIPProcessor, CLIPModel
+import spacy
+import requests
+import base64
+import io
 
-
+# Load models and processor
 nlp = spacy.load("en_core_web_sm")
-model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
-processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-cur_image = len(os.listdir('generated_images'))
+clip_model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+clip_processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+translator = Translator()
+recognizer = sr.Recognizer()
 
-def translate_to_english(thai_text):
-    if not thai_text.strip():
-        print("No Thai text provided.")
-        return ""
-
-    translator = Translator()
-    try:
-        translated = translator.translate(thai_text, src='th', dest='en')
-        return translated.text
-    except Exception as e:
-        print(f"Translation error: {e}")
-        return ""
-
-# Function to recognize speech and return the recognized text in Thai
-def recognize_speech():
-    recognizer = sr.Recognizer()
+# Function to recognize speech in Thai and translate to English
+def recognize():
     with sr.Microphone() as source:
-        print("Listening...")
-        while recording:  # ฟังเสียงต่อเนื่องจนกว่าจะมีการหยุด
-            audio = recognizer.listen(source)
-            try:
-                thai_text = recognizer.recognize_google(audio, language="th-TH")
-                print(f"Recognized Thai: {thai_text}")
-                process_text(thai_text)  # ส่งข้อความที่รู้จำไปยังฟังก์ชันประมวลผล
-            except sr.UnknownValueError:
-                print("Could not understand audio")
-            except sr.RequestError as e:
-                print(f"Could not request results; {e}")
+        audio = recognizer.listen(source)
+        try:
+            thai_text = recognizer.recognize_google(audio, language="th-TH")
+            return thai_text, audio
+        except sr.UnknownValueError:
+            return "Could not understand the audio.", None
+        except sr.RequestError as e:
+            return f"Recognition error: {str(e)}", None
 
-def process_text(thai_text):
-    english_text = translate_to_english(thai_text)
-    prompt = convert_to_prompt(english_text)
-    if prompt:
-        output_box.insert(tk.END, f"Prompt: {prompt}\n")
-        file_name = submit_prompt(prompt)
-        save_text(thai_text, english_text)
-        similarity_score = evaluate_text_image_similarity(english_text, file_name)
-        output_box.insert(tk.END, f"Similarity : {similarity_score:.4f}")
-    else:
-        pass
+def translate(thai_text):
+    try:
+        english_text = translator.translate(thai_text, src="th", dest="en").text
+        return english_text
+    except Exception as e:
+        return None
 
-# Function to start recording in a separate thread
-def start_recording():
-    global recording
-    recording = True
-    status_label.config(text="Recording started...")
-    threading.Thread(target=recognize_speech, daemon=True).start()  # เริ่มรับเสียงใน thread ใหม่
+def generate_prompt(text):
+    return ' '.join([token.text for token in nlp(text) if token.pos_ in ("NOUN", "VERB")])
 
-# Function to stop recording
-def stop_recording():
-    global recording
-    recording = False
-    status_label.config(text="Recording stopped.")
-
-# Function to simulate converting English text to an image generation prompt
-def convert_to_prompt(english_text):
-    # prompt = convert_to_prompt_with_t5(english_text) 
-    keywords = extract_keywords(english_text)
-    if keywords:
-        prompt = f"create image by topic '{keywords}'. with black-white background and line to draw"
-        return prompt
-    else :
-        return ''
-
-def extract_keywords(text):
-    doc = nlp(text)
+# Generate an image based on the prompt and return the similarity score
+def generate_image(prompt):
+    # Stability API request
+    with open('stability_key.txt', 'r', encoding='utf-8') as file:
+        api_key = file.read().strip()
     
-    keywords = []
-    
-    # ดึงเฉพาะคำนาม (Nouns), คำคุณศัพท์ (Adjectives) หรือ Entity (Named Entities)
-    for token in doc:
-        if token.pos_ in ("NOUN", 'VERB'): # , "PROPN", "ADJ"
-            keywords.append(token.text)
-    
-    # หรือสามารถดึง Noun Chunks (กลุ่มคำที่เป็นคำนาม)
-    # for chunk in doc.noun_chunks:
-    #     keywords.append(chunk.text)
-
-    return keywords
-
-def read_file(filepath):
-    with open(filepath, 'r', encoding='utf-8') as file:
-        return file.read().strip()
-
-def generate_image(text):
-    """Calls the Stability AI API to generate an image based on the given text."""
-    api_key = read_file('stability_key.txt')  # Ensure this file exists with your API key
-    api_host = "https://api.stability.ai"
-    engine_id = "stable-diffusion-xl-1024-v1-0"
-
-    prompt = text
-
-    # Make the API request to generate an image
     response = requests.post(
-        f"{api_host}/v1/generation/{engine_id}/text-to-image",
+        "https://api.stability.ai/v1/generation/stable-diffusion-xl-1024-v1-0/text-to-image",
         headers={
             "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {api_key}"
         },
         json={
             "text_prompts": [{"text": prompt}],
@@ -124,126 +57,89 @@ def generate_image(text):
             "height": 1024,
             "width": 1024,
             "samples": 1,
-            "steps": 30,
-        },
+            "steps": 30
+        }
     )
 
-    if response.status_code != 200:
-        print(f"Error: {response.text}")
+    if response.status_code == 200:
+        image_base64 = response.json()["artifacts"][0]["base64"]
+        image_data = base64.b64decode(image_base64)
+        image = Image.open(io.BytesIO(image_data))
+        
+        return image
+    else:
         return None
 
-    # Extract image from the response
-    data = response.json()
-    image_base64 = data["artifacts"][0]["base64"]
-    
-    # Decode the image from base64
-    image_data = base64.b64decode(image_base64)
-    image = Image.open(io.BytesIO(image_data))
-    
-    return image
-
-def evaluate_text_image_similarity(text, image_path):
-    # Load and preprocess image
-    # image = Image.open(image_path)
-    
-    # Preprocess text and image
-    inputs = processor(text=[text], images=image_path, return_tensors="pt", padding=True)
-
-    # Compute embeddings
+def clip_score(text, image):
+    inputs = clip_processor(text=[text], images=image, return_tensors="pt", padding=True)
     with torch.no_grad():
-        outputs = model(**inputs)
+        outputs = clip_model(**inputs)
         text_embeds = outputs.text_embeds
         image_embeds = outputs.image_embeds
+        return (text_embeds @ image_embeds.T).item()
 
-    # Normalize embeddings
-    text_embeds = text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
-    image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
-
-    # Compute cosine similarity
-    similarity = (text_embeds @ image_embeds.T).item()
-    
-    return similarity
-
-def submit_thai():
-    thai_text = thai_input.get()
-    if thai_text and not recording:
-        process_text(thai_text)
-    else:
-        output_box.insert(tk.END, "Thai text is empty or recording is active.\n")
-
-# Save the Thai and English texts to separate files
-def save_text(thai_text, english_text):
-    with open("thai_text.txt", "a", encoding="utf-8") as thai_file:
-        thai_file.write(thai_text + "\n")
-    
-    with open("english_text.txt", "a", encoding="utf-8") as english_file:
-        english_file.write(english_text + "\n")
-        
-def save_image(image, folder="generated_images"):
+def save_log(thai_text, translated_text, prompt, image):
+    folder = "generated_images"
     if not os.path.exists(folder):
         os.makedirs(folder)
-    
-    # สร้างชื่อไฟล์ที่ไม่ซ้ำกัน
-    filename = os.path.join(folder, f"generated_image_{len(os.listdir(folder)) + 1}.png")
-    image.save(filename)
-    print(f"Saved image to {filename}")
-    return filename
 
-def show_image(image):
-    # Create a new window for the image
-    image = image.resize((600, 600))  # ปรับขนาดภาพให้เป็น 600x600
-    img = ImageTk.PhotoImage(image)
-
-    # อัปเดตภาพใน Label ที่สร้างไว้
-    image_label.config(image=img)
-    image_label.image = img 
-
-def submit_prompt(prompt):
-    image = generate_image(prompt)
+    image_filename = f"{folder}/image_{len(os.listdir(folder)) + 1}.png"
     if image:
-        show_image(image)
-        file_name = save_image(image)
-    return image # file_name
+        image.save(image_filename)
 
-root = tk.Tk()
-root.title("Image Generator")
+    with open("thai_texts.txt", "a", encoding="utf-8") as f1, open("translated_texts.txt", "a", encoding="utf-8") as f2, open("prompts.txt", "a", encoding="utf-8") as f3:
+        f1.write(thai_text + "\n")
+        f2.write(translated_text + "\n")
+        f3.write(prompt + "\n")
+        
+# Gradio interface functions
+def process_audio():
+    
+    thai_text, audio = recognize()
+    english_text = translate(thai_text)
+    prompt = generate_prompt(english_text)
+    image = generate_image(prompt)
+    score = clip_score(english_text, image)
+    save_log(thai_text, english_text, prompt, image)
+    return thai_text, audio, english_text, prompt, score, image
+    
 
-# Frame สำหรับปุ่มและ input
-control_frame = tk.Frame(root)
-control_frame.pack(side=tk.LEFT, padx=10, pady=10)
+def process_text(text):
+    
+    thai_text = text
+    english_text = translate(thai_text)
+    prompt = generate_prompt(english_text)
+    image = generate_image(prompt)
+    score = clip_score(english_text, image)
+    save_log(thai_text, english_text, prompt, image)
+    return '', english_text, prompt, score, image
+    
 
-# พื้นที่สำหรับแสดงผลรูปภาพ
-image_frame = tk.Frame(root)
-image_frame.pack(side=tk.RIGHT, padx=10, pady=10)
+# Gradio layout with image on the right
+with gr.Blocks() as demo:
+    with gr.Row():
+        with gr.Column():
+            recognize_button = gr.Button("Start Record")
+            audio_output = gr.Audio(label="Recorded voice")
+            text_input = gr.Textbox(label="Enter Thai Text")
+            text_button = gr.Button("Submit Text")
 
-# พื้นที่แสดงผลภาพ (600x600)
-image_label = Label(image_frame)
-image_label.pack()
+            thai_text_output = gr.Textbox(label="Recognized Thai Text")
+            english_text_output = gr.Textbox(label="Translated English Text")
+            prompt_output = gr.Textbox(label="Generated Prompt")
 
-status_label = tk.Label(control_frame, text="Press 'Start Recording' to begin")
-status_label.pack()
+        with gr.Column():
+            image_output = gr.Image(label="Generated Image")
+            similarity_score_output = gr.Number(label="CLIP Similarity Score")
 
-start_button = tk.Button(control_frame, text="Start Recording", command=start_recording)
-start_button.pack()
+    recognize_button.click(
+        process_audio,
+        outputs=[thai_text_output, audio_output, english_text_output, prompt_output, similarity_score_output, image_output]
+    )
+    text_button.click(
+        process_text,
+        inputs=[text_input],
+        outputs=[thai_text_output, english_text_output, prompt_output, similarity_score_output, image_output]
+    )
 
-stop_button = tk.Button(control_frame, text="Stop Recording", command=stop_recording)
-stop_button.pack()
-
-thai_input_label = tk.Label(control_frame, text="Manual Thai Input:")
-thai_input_label.pack()
-
-thai_input = tk.Entry(control_frame, width=20)
-thai_input.pack()
-
-submit_button = tk.Button(control_frame, text="Submit Thai", command=submit_thai)
-submit_button.pack(pady=10)
-
-output_box = scrolledtext.ScrolledText(control_frame, width=20, height=10)
-output_box.pack()
-
-exit_button = tk.Button(control_frame, text="Exit", command=root.quit)
-exit_button.pack()
-
-recording = False  # ตัวแปรสถานะการบันทึก
-root.geometry("800x600")
-root.mainloop()
+demo.launch()

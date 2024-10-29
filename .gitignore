@@ -1,7 +1,6 @@
 .env
 
 *.txt
-*.log
 *.pyc
 
 /generated_images
